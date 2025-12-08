@@ -1,0 +1,10 @@
+image:
+  repository: ghcr.io/wangsouza/yolov8-webapp
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8000
+
+resources: {}

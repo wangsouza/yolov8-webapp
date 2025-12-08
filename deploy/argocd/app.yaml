@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: yolov8-webapp
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/wangsouza/ultralytics_yolov8.git
+    targetRevision: main
+    path: yolov8-webapp/deploy/helm/yolov8-webapp
+    helm:
+      values: |
+        image:
+          repository: ghcr.io/wangsouza/yolov8-webapp
+          tag: latest
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: yolov8
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

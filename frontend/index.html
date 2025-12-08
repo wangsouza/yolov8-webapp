@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>YOLOv8 WebApp</title>
+  <style>
+    body { font-family: sans-serif; margin: 0; display: flex; height: 100vh; }
+    .center { flex: 1; display: flex; align-items: center; justify-content: center; background: #f7f7f7; }
+    .panel { width: 340px; border-left: 1px solid #ddd; padding: 12px; overflow-y: auto; }
+    canvas { background: #000; }
+    .log { height: 160px; overflow-y: auto; background: #111; color: #0f0; padding: 8px; font-family: monospace; }
+    .controls label { display: block; margin: 6px 0; }
+  </style>
+</head>
+<body>
+  <div class="center">
+    <canvas id="view" width="960" height="540"></canvas>
+  </div>
+  <div class="panel">
+    <h3>Configurações</h3>
+    <div class="controls">
+      <label>
+        Threshold (confiança):
+        <input type="range" id="confidence" min="0" max="1" step="0.01" value="0.25" />
+        <span id="conf_val">0.25</span>
+      </label>
+      <div>
+        <strong>Classes:</strong>
+        <div id="classes"></div>
+      </div>
+      <button id="start">Iniciar Câmera</button>
+      <button id="stop">Parar</button>
+    </div>
+    <h3>Logs</h3>
+    <div class="log" id="logs"></div>
+  </div>
+
+  <script>
+    const TARGET_CLASSES = ["person","laptop","cell phone","cup","book","mug"];
+    const canvas = document.getElementById('view');
+    const ctx = canvas.getContext('2d');
+    const logs = document.getElementById('logs');
+    const confidenceSlider = document.getElementById('confidence');
+    const confVal = document.getElementById('conf_val');
+    const startBtn = document.getElementById('start');
+    const stopBtn = document.getElementById('stop');
+    const classesDiv = document.getElementById('classes');
+
+    let stream = null;
+    let video = null;
+    let ws = null;
+    let running = false;
+    let lastDetections = [];
+    let lastDetectionsTs = 0;
+    let lastSendTs = 0;
+
+    function log(msg) {
+      const el = document.createElement('div');
+      el.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      logs.appendChild(el);
+      logs.scrollTop = logs.scrollHeight;
+    }
+
+    // Build class checkboxes
+    const classState = {};
+    TARGET_CLASSES.forEach(c => {
+      const id = `cls_${c.replace(/\s+/g, '_')}`;
+      const label = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.id = id; cb.checked = true; classState[c] = true;
+      cb.addEventListener('change', () => { classState[c] = cb.checked; sendConfig(); });
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(' ' + c));
+      classesDiv.appendChild(label);
+    });
+
+    confidenceSlider.addEventListener('input', () => {
+      confVal.textContent = confidenceSlider.value;
+      sendConfig();
+    });
+
+    function sendConfig() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      const enabled = Object.keys(classState).filter(k => classState[k]);
+      ws.send(JSON.stringify({
+        type: 'config',
+        payload: { confidence: parseFloat(confidenceSlider.value), classes: enabled }
+      }));
+    }
+
+    async function startCamera() {
+      if (running) return;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { width: 960, height: 540 } });
+        video = document.createElement('video');
+        video.srcObject = stream; await video.play();
+        running = true;
+        connectWS();
+        loop();
+        log('Câmera iniciada');
+      } catch (e) {
+        log('Erro iniciando câmera: ' + e);
+      }
+    }
+
+    function stopCamera() {
+      running = false;
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      stream = null; video = null;
+      if (ws) ws.close();
+      log('Câmera parada');
+    }
+
+    function connectWS() {
+      ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host.replace(/:\d+$/, ':8000') + '/ws');
+      ws.onopen = () => { log('WebSocket conectado'); sendConfig(); };
+      ws.onmessage = (ev) => {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'log') log(msg.message);
+        else if (msg.type === 'error') log('ERRO: ' + msg.message);
+        else if (msg.type === 'detections') {
+          // Store detections to render on every animation frame
+          lastDetections = msg.payload.detections || [];
+          lastDetectionsTs = performance.now();
+        }
+      };
+      ws.onclose = () => log('WebSocket desconectado');
+    }
+
+    function drawDetections(dets) {
+      // Drop stale boxes if no update for a while
+      if (performance.now() - lastDetectionsTs > 500) return;
+      if (!video) return;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = '#00ff00'; ctx.lineWidth = 2; ctx.font = '14px sans-serif';
+      dets.forEach(d => {
+        // Client-side filter to hide boxes immediately when checkbox is off
+        if (!classState[d.cls]) return;
+        const [x1,y1,x2,y2] = d.xyxy;
+        ctx.strokeRect(x1, y1, x2-x1, y2-y1);
+        const label = `${d.cls} ${(d.conf*100).toFixed(1)}%`;
+        const tw = ctx.measureText(label).width + 8;
+        const th = 18;
+        // Draw label background inside the box (top-left corner)
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.fillRect(x1, y1 + 2, tw, th);
+        ctx.fillStyle = '#00ff00';
+        ctx.fillText(label, x1 + 4, y1 + 15);
+      });
+    }
+
+    function loop() {
+      if (!running || !video) return;
+      // Draw video to canvas and send frame to backend
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      // Draw last detections persistently each frame
+      drawDetections(lastDetections);
+      // Throttle send to ~10 FPS
+      const now = performance.now();
+      if (now - lastSendTs > 100) {
+        lastSendTs = now;
+        canvas.toBlob(async (blob) => {
+          const arr = await blob.arrayBuffer();
+          const b64 = btoa(String.fromCharCode(...new Uint8Array(arr)));
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'frame', payload: { image: b64 } }));
+          }
+        }, 'image/jpeg', 0.9);
+      }
+      requestAnimationFrame(loop);
+    }
+
+    startBtn.onclick = startCamera;
+    stopBtn.onclick = stopCamera;
+  </script>
+</body>
+</html>
