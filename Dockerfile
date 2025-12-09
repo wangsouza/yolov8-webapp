@@ -2,7 +2,9 @@
 FROM python:3.12-slim
 WORKDIR /app
 COPY backend/requirements.txt /app/backend/requirements.txt
-RUN pip install --no-cache-dir -r /app/backend/requirements.txt
+# Install CPU-only PyTorch to avoid huge CUDA wheels
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch torchvision && \
+	pip install --no-cache-dir -r /app/backend/requirements.txt
 COPY backend /app/backend
 COPY frontend /app/frontend
 # Serve frontend via FastAPI static mount (optional); otherwise bind-mount
