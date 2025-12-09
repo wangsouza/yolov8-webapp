@@ -8,3 +8,7 @@ service:
   port: 8000
 
 resources: {}
+
+# Optional: add imagePullSecrets when using private registries
+imagePullSecrets:
+  - name: ghcr-creds
