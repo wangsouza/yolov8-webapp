@@ -21,8 +21,8 @@ jobs:
         run: |
           pwd
           ls -la
-          echo "---- repo tree ----"
-          find . -maxdepth 2 -type d -print
+          echo "---- files ----"
+          find . -maxdepth 3 -type f -print
 
       - name: Set up Python
         uses: actions/setup-python@v5
